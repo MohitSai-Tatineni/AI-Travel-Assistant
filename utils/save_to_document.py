@@ -5,8 +5,6 @@ def save_document(response_text: str, directory: str = "./output"):
     """Export travel plan to Markdown file with proper formatting"""
     os.makedirs(directory, exist_ok=True)
     
-    
-    # Create markdown content with metadata header
     markdown_content = f"""# 🌍 AI Travel Plan
 
     # **Generated:** {datetime.datetime.now().strftime('%Y-%m-%d at %H:%M')}  
@@ -22,8 +20,7 @@ def save_document(response_text: str, directory: str = "./output"):
     """
             
     try:
-        # Write to markdown file with UTF-8 encoding
-        # Generate timestamp-based filename
+
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         filename = f"{directory}/AI_Trip_Planner_{timestamp}.md"
 
