@@ -1,0 +1,15 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.venv/
+AI/
+new/
+build/
+dist/
+*.egg-info/
+my_graph.png
+notebook/
