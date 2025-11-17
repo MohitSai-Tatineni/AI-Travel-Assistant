@@ -37,6 +37,7 @@ jobs:
 
           docker buildx build \
             --platform linux/amd64 \
+            --no-cache \
             -f Dockerfile.backend \
             -t $BACKEND_IMAGE \
             --push \
@@ -49,6 +50,7 @@ jobs:
 
           docker buildx build \
             --platform linux/amd64 \
+            --no-cache \
             -f Dockerfile.frontend \
             -t $FRONTEND_IMAGE \
             --push \
