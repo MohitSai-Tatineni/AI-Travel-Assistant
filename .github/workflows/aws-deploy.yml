@@ -8,9 +8,16 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+      ECR_REPO_BACKEND: ${{ secrets.ECR_REPO_BACKEND }}
+      ECR_REPO_FRONTEND: ${{ secrets.ECR_REPO_FRONTEND }}
+      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+      IMAGE_TAG: ${{ github.sha }}
 
     steps:
       - name: Checkout repository
@@ -30,36 +37,77 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Build and push backend image
         run: |
-          BACKEND_IMAGE=${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO_BACKEND }}:latest
-          echo "Building and pushing backend image: $BACKEND_IMAGE"
+          BACKEND_IMAGE_LATEST=${ECR_REGISTRY}/${ECR_REPO_BACKEND}:latest
+          BACKEND_IMAGE_SHA=${ECR_REGISTRY}/${ECR_REPO_BACKEND}:${IMAGE_TAG}
+          echo "Building and pushing backend image: $BACKEND_IMAGE_SHA and :latest"
 
           docker buildx build \
             --platform linux/amd64 \
-            --no-cache \
             -f Dockerfile.backend \
-            -t $BACKEND_IMAGE \
+            --tag "$BACKEND_IMAGE_SHA" \
+            --tag "$BACKEND_IMAGE_LATEST" \
             --push \
             .
 
       - name: Build and push frontend image
         run: |
-          FRONTEND_IMAGE=${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPO_FRONTEND }}:latest
-          echo "Building and pushing frontend image: $FRONTEND_IMAGE"
+          FRONTEND_IMAGE_LATEST=${ECR_REGISTRY}/${ECR_REPO_FRONTEND}:latest
+          FRONTEND_IMAGE_SHA=${ECR_REGISTRY}/${ECR_REPO_FRONTEND}:${IMAGE_TAG}
+          echo "Building and pushing frontend image: $FRONTEND_IMAGE_SHA and :latest"
 
           docker buildx build \
             --platform linux/amd64 \
-            --no-cache \
             -f Dockerfile.frontend \
-            -t $FRONTEND_IMAGE \
+            --tag "$FRONTEND_IMAGE_SHA" \
+            --tag "$FRONTEND_IMAGE_LATEST" \
             --push \
             .
 
-      - name: Force new ECS deployment
+      - name: Update ECS service to new images
         run: |
+          set -e
+          # Fetch current task definition ARN
+          TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          # Pull current task definition JSON
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_DEF_ARN" \
+            --query 'taskDefinition' > task-def.json
+
+          # Rewrite images for backend/frontend and strip read-only fields
+          jq \
+            --arg backend_repo "$ECR_REPO_BACKEND" \
+            --arg backend_image "${ECR_REGISTRY}/${ECR_REPO_BACKEND}:${IMAGE_TAG}" \
+            --arg frontend_repo "$ECR_REPO_FRONTEND" \
+            --arg frontend_image "${ECR_REGISTRY}/${ECR_REPO_FRONTEND}:${IMAGE_TAG}" \
+            '
+            .containerDefinitions |= map(
+              if (.image | contains($backend_repo)) then .image = $backend_image
+              elif (.image | contains($frontend_repo)) then .image = $frontend_image
+              else . end
+            )
+            | del(.status, .taskDefinitionArn, .revision, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+            ' task-def.json > new-task-def.json
+
+          # Register new task definition revision
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          # Deploy the new revision
           aws ecs update-service \
-            --cluster "${{ secrets.ECS_CLUSTER }}" \
-            --service "${{ secrets.ECS_SERVICE }}" \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$NEW_TASK_DEF_ARN" \
             --force-new-deployment \
-            --region "${{ secrets.AWS_REGION }}"
+            --region "$AWS_REGION"
