@@ -15,6 +15,8 @@ jobs:
       ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
       ECR_REPO_BACKEND: ${{ secrets.ECR_REPO_BACKEND }}
       ECR_REPO_FRONTEND: ${{ secrets.ECR_REPO_FRONTEND }}
+      BACKEND_CONTAINER_NAME: ${{ secrets.ECS_BACKEND_CONTAINER_NAME }}
+      FRONTEND_CONTAINER_NAME: ${{ secrets.ECS_FRONTEND_CONTAINER_NAME }}
       ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
       ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
       IMAGE_TAG: ${{ github.sha }}
@@ -42,6 +44,7 @@ jobs:
 
       - name: Build and push backend image
         run: |
+          # Build backend with both :latest and commit-SHA tags, then push to ECR
           BACKEND_IMAGE_LATEST=${ECR_REGISTRY}/${ECR_REPO_BACKEND}:latest
           BACKEND_IMAGE_SHA=${ECR_REGISTRY}/${ECR_REPO_BACKEND}:${IMAGE_TAG}
           echo "Building and pushing backend image: $BACKEND_IMAGE_SHA and :latest"
@@ -56,6 +59,7 @@ jobs:
 
       - name: Build and push frontend image
         run: |
+          # Build frontend with both :latest and commit-SHA tags, then push to ECR
           FRONTEND_IMAGE_LATEST=${ECR_REGISTRY}/${ECR_REPO_FRONTEND}:latest
           FRONTEND_IMAGE_SHA=${ECR_REGISTRY}/${ECR_REPO_FRONTEND}:${IMAGE_TAG}
           echo "Building and pushing frontend image: $FRONTEND_IMAGE_SHA and :latest"
@@ -71,6 +75,17 @@ jobs:
       - name: Update ECS service to new images
         run: |
           set -e
+          # Resolve container names (fallback to sensible defaults)
+          BACKEND_NAME="${BACKEND_CONTAINER_NAME:-backend}"
+          FRONTEND_NAME="${FRONTEND_CONTAINER_NAME:-frontend}"
+
+          echo "ECS Cluster: ${ECS_CLUSTER}"
+          echo "ECS Service: ${ECS_SERVICE}"
+          echo "Backend container: ${BACKEND_NAME}"
+          echo "Frontend container: ${FRONTEND_NAME}"
+          echo "Backend image: ${ECR_REGISTRY}/${ECR_REPO_BACKEND}:${IMAGE_TAG}"
+          echo "Frontend image: ${ECR_REGISTRY}/${ECR_REPO_FRONTEND}:${IMAGE_TAG}"
+
           # Fetch current task definition ARN
           TASK_DEF_ARN=$(aws ecs describe-services \
             --cluster "$ECS_CLUSTER" \
@@ -83,16 +98,16 @@ jobs:
             --task-definition "$TASK_DEF_ARN" \
             --query 'taskDefinition' > task-def.json
 
-          # Rewrite images for backend/frontend and strip read-only fields
+          # Rewrite images by container name and strip read-only fields
           jq \
-            --arg backend_repo "$ECR_REPO_BACKEND" \
+            --arg backend_name "$BACKEND_NAME" \
             --arg backend_image "${ECR_REGISTRY}/${ECR_REPO_BACKEND}:${IMAGE_TAG}" \
-            --arg frontend_repo "$ECR_REPO_FRONTEND" \
+            --arg frontend_name "$FRONTEND_NAME" \
             --arg frontend_image "${ECR_REGISTRY}/${ECR_REPO_FRONTEND}:${IMAGE_TAG}" \
             '
             .containerDefinitions |= map(
-              if (.image | contains($backend_repo)) then .image = $backend_image
-              elif (.image | contains($frontend_repo)) then .image = $frontend_image
+              if .name == $backend_name then .image = $backend_image
+              elif .name == $frontend_name then .image = $frontend_image
               else . end
             )
             | del(.status, .taskDefinitionArn, .revision, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
